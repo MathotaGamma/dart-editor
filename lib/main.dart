@@ -1,8 +1,10 @@
-// v6からの差分:
-// - キーボード表示中にパネルを非表示にする方式をやめ、パネルを画面下部に固定
-//   (キーボードはパネルの上に重なる。パネルがキーボードに押し上げられない)
-// - エディタ(コード欄と記号バー)は、キーボードの上端に合わせて自動で縮む
-//   (パネルより上にキーボードが出る分だけ、エディタの下に余白を追加)
+// v6からの差分(v7は使用しません。v6に戻した上での修正です):
+// - パネルの表示/非表示を、キーボードの高さ(viewInsets)ではなく
+//   「コード欄にフォーカスがあるか」で切り替えるように変更
+//   (キーボードの開閉とレイアウトが連動しないため、キーボードが勝手に閉じるループが起きない)
+// - Scaffold の標準のキーボード対応(本体がキーボードの上に収まる)を使う
+//   (カーソル位置とタッチ位置がずれる問題の対策)
+// - コード欄のFocusNodeをHomePageで保持し、EditorViewに渡す
 
 import 'dart:async';
 import 'dart:convert';
@@ -621,6 +623,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _fontSize = 14;
   bool _loaded = false;
   Timer? _saveTimer;
+  final FocusNode _editorFocus = FocusNode();
   String? _output;
   bool _running = false;
   int _panelTab = 0;
@@ -633,7 +636,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _editorFocus.addListener(_onEditorFocusChanged);
     _load();
+  }
+
+  void _onEditorFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -641,6 +649,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _saveTimer?.cancel();
     _saveNow();
+    _editorFocus.removeListener(_onEditorFocusChanged);
+    _editorFocus.dispose();
     super.dispose();
   }
 
@@ -932,17 +942,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  double _panelHeight() {
-    if (_panelTab == 1) {
-      final screenH = MediaQuery.of(context).size.height;
-      return (screenH * 0.5).clamp(260.0, 440.0).toDouble();
-    }
-    return 180.0;
-  }
-
   Widget _buildPanel() {
     final isDevice = _panelTab == 1;
-    final height = _panelHeight();
+    final screenH = MediaQuery.of(context).size.height;
+    final height = isDevice ? (screenH * 0.5).clamp(260.0, 440.0).toDouble() : 180.0;
     final src = _previewSource;
 
     return Container(
@@ -1021,11 +1024,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     final name = _current;
-    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
-    final panelHeight = _output != null ? _panelHeight() : 0.0;
-    final editorBottomPad = math.max(0.0, keyboardHeight - panelHeight);
     return Scaffold(
-      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Text(name, style: const TextStyle(fontSize: 16)),
         actions: [
@@ -1111,23 +1110,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       body: Column(
         children: [
           Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(bottom: editorBottomPad),
-              child: MediaQuery(
-                data: MediaQuery.of(context).removeViewInsets(removeBottom: true),
-                child: EditorView(
-                  key: ValueKey(name),
-                  initialText: _files[name] ?? '',
-                  fontSize: _fontSize,
-                  onChanged: (t) {
-                    _files[name] = t;
-                    _scheduleSave();
-                  },
-                ),
-              ),
+            child: EditorView(
+              key: ValueKey(name),
+              focusNode: _editorFocus,
+              initialText: _files[name] ?? '',
+              fontSize: _fontSize,
+              onChanged: (t) {
+                _files[name] = t;
+                _scheduleSave();
+              },
             ),
           ),
-          if (_output != null) _buildPanel(),
+          if (_output != null)
+            Offstage(offstage: _editorFocus.hasFocus, child: _buildPanel()),
         ],
       ),
     );
@@ -1228,11 +1223,13 @@ const List<_Sym> _symbols = [
 class EditorView extends StatefulWidget {
   const EditorView({
     super.key,
+    required this.focusNode,
     required this.initialText,
     required this.fontSize,
     required this.onChanged,
   });
 
+  final FocusNode focusNode;
   final String initialText;
   final double fontSize;
   final ValueChanged<String> onChanged;
@@ -1246,7 +1243,6 @@ class _EditorViewState extends State<EditorView> {
 
   late final DartCodeController _controller;
   final UndoHistoryController _undo = UndoHistoryController();
-  final FocusNode _focus = FocusNode();
 
   double _cachedFontSize = -1;
   double _cachedCharWidth = 8;
@@ -1261,7 +1257,6 @@ class _EditorViewState extends State<EditorView> {
   void dispose() {
     _controller.dispose();
     _undo.dispose();
-    _focus.dispose();
     super.dispose();
   }
 
@@ -1338,7 +1333,7 @@ class _EditorViewState extends State<EditorView> {
                   return SingleChildScrollView(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => _focus.requestFocus(),
+                      onTap: () => widget.focusNode.requestFocus(),
                       child: ConstrainedBox(
                         constraints: BoxConstraints(minHeight: c.maxHeight),
                         child: Row(
@@ -1365,7 +1360,7 @@ class _EditorViewState extends State<EditorView> {
                                     padding: const EdgeInsets.fromLTRB(4, 12, 0, 80),
                                     child: TextField(
                                       controller: _controller,
-                                      focusNode: _focus,
+                                      focusNode: widget.focusNode,
                                       undoController: _undo,
                                       maxLines: null,
                                       keyboardType: TextInputType.multiline,
