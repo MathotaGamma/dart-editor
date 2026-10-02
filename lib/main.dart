@@ -1,7 +1,11 @@
-// v9からの差分:
-// - フォントを 'monospace'(Webでは等幅にならず、ブラウザ側の入力要素と表示がずれる原因)から、
-//   アプリに同梱する等幅フォント JetBrainsMono に変更
-//   (表示用の文字幅と、ブラウザ側の入力要素の文字幅が一致し、カーソル位置のずれを防ぐ)
+// v6からの差分(v7, v8は使用しません。v6をベースに構造を作り直しました):
+// - 下部パネルをやめ、結果表示(コンソール/仮想デバイス)をエディタの高さと競合しない配置に変更
+//   ・横幅720px以上: エディタの右側に表示(左右分割)
+//   ・横幅720px未満: エディタ全体を覆う画面として表示(×で戻る)
+// - コード欄を、標準的な構成(1つの TextField が領域いっぱいに広がり、自前のスクロールを持つ)に変更
+//   ・外側のスクロール(縦横の入れ子)をやめた(カーソル位置のずれ、キーボードが閉じる問題の対策)
+//   ・横スクロールはなくなり、長い行は折り返して表示。行番号は折り返しに合わせて表示
+// - キーボード対応は Scaffold の標準動作(本体がキーボードの上に収まる)に統一
 
 import 'dart:async';
 import 'dart:convert';
@@ -897,7 +901,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         child: SelectableText(
           _output ?? '',
           style: TextStyle(
-            fontFamily: 'JetBrainsMono',
+            fontFamily: 'monospace',
             fontSize: _fontSize,
             color: _C.text,
           ),
@@ -1339,14 +1343,14 @@ class _EditorViewState extends State<EditorView> {
   Widget build(BuildContext context) {
     final fs = widget.fontSize;
     final style = TextStyle(
-      fontFamily: 'JetBrainsMono',
-      fontFamilyFallback: const ['monospace', 'Menlo', 'Consolas', 'Courier New'],
+      fontFamily: 'monospace',
+      fontFamilyFallback: const ['Menlo', 'Consolas', 'Courier New'],
       fontSize: fs,
       height: _lineHeight,
       color: _C.text,
     );
     final strut = StrutStyle(
-      fontFamily: 'JetBrainsMono',
+      fontFamily: 'monospace',
       fontSize: fs,
       height: _lineHeight,
       forceStrutHeight: true,
@@ -1491,7 +1495,7 @@ class _EditorViewState extends State<EditorView> {
                             child: Text(
                               s.label,
                               style: const TextStyle(
-                                fontFamily: 'JetBrainsMono',
+                                fontFamily: 'monospace',
                                 fontSize: 16,
                                 color: _C.text,
                               ),
