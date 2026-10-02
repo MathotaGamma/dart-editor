@@ -1,3 +1,8 @@
+// v1からの差分:
+// - 行番号の高さを、色付き表示側(<pre>)の各行の実際の高さに合わせて並べるように変更
+//   (日本語など別フォントの文字を含む行が少し高くなり、行番号がずれる問題の対策)
+// - Enter押下時の自動インデントに、再入防止の処理を追加
+
 // Web専用のコードエディタ。
 // Flutterの TextField ではなく、ブラウザ標準の <textarea> を HtmlElementView で埋め込む。
 // (iPadのSafariで、タッチ位置とカーソル位置がずれる問題を避けるため)
@@ -123,6 +128,18 @@ const String _script = r'''
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  function emit(color, text) {
+    // 改行を含むトークンは、行ごとに分けて色を付ける(行単位でHTMLを分割できるようにするため)
+    var parts = text.split("\n");
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var e = esc(parts[i]);
+      if (color && parts[i] !== "") out.push("<span style=\"color:" + color + "\">" + e + "</span>");
+      else out.push(e);
+    }
+    return out.join("\n");
+  }
+
   function highlight(src) {
     var out = "", last = 0, m;
     TOKEN.lastIndex = 0;
@@ -143,8 +160,7 @@ const String _script = r'''
           if (src.charAt(i) === "(") color = COLORS.fn;
         }
       }
-      if (color) out += "<span style=\"color:" + color + "\">" + esc(tok) + "</span>";
-      else out += esc(tok);
+      out += emit(color, tok);
       last = m.index + tok.length;
     }
     if (last < src.length) out += esc(src.slice(last));
@@ -170,7 +186,8 @@ const String _script = r'''
       ".dce-ta::selection{background:rgba(38,79,120,0.85);}" +
       ".dce-ta{-webkit-text-fill-color:transparent;}" +
       ".dce-bar::-webkit-scrollbar{display:none;}" +
-      ".dce-btn:active{background:#3a3a3a;}";
+      ".dce-btn:active{background:#3a3a3a;}" +
+      ".dce-l{min-height:var(--dce-lh);}";
 
     var root = document.createElement("div");
     root.style.cssText =
@@ -234,25 +251,29 @@ const String _script = r'''
         e.style.letterSpacing = "0";
         e.style.tabSize = "2";
       });
+      root.style.setProperty("--dce-lh", lh + "px");
     }
 
-    var lineCount = -1;
     function sync() {
       pre.scrollTop = ta.scrollTop;
       pre.scrollLeft = ta.scrollLeft;
       gutter.scrollTop = ta.scrollTop;
     }
     function render() {
-      var v = ta.value;
-      pre.innerHTML = highlight(v) + "\n";
-      var n = v.split("\n").length;
-      if (n !== lineCount) {
-        lineCount = n;
-        var nums = [];
-        for (var i = 1; i <= n; i++) nums.push(String(i));
-        gutter.textContent = nums.join("\n");
-        gutter.style.width = Math.max(2, String(n).length) + "ch";
+      var lines = highlight(ta.value).split("\n");
+      var html = "";
+      for (var i = 0; i < lines.length; i++) {
+        html += "<div class=\"dce-l\">" + lines[i] + "</div>";
       }
+      pre.innerHTML = html;
+      // 各行の実際の高さ(日本語など別フォントの文字で高くなることがある)に、行番号の高さを合わせる
+      var kids = pre.children, g = "";
+      for (var j = 0; j < kids.length; j++) {
+        var h = kids[j].getBoundingClientRect().height;
+        g += "<div style=\"overflow:hidden;height:" + h + "px\">" + (j + 1) + "</div>";
+      }
+      gutter.innerHTML = g;
+      gutter.style.width = Math.max(2, String(lines.length).length) + "ch";
       sync();
     }
 
@@ -270,7 +291,10 @@ const String _script = r'''
       }
     }
 
+    var busyInsert = false;
+
     function onBeforeInput(e) {
+      if (busyInsert) return;
       if (e.inputType !== "insertLineBreak" && e.inputType !== "insertParagraph") return;
       var v = ta.value, s = ta.selectionStart, en = ta.selectionEnd;
       if (s !== en) return;
@@ -282,12 +306,17 @@ const String _script = r'''
       var next = v.charAt(s);
       var closes = next === "}" || next === ")" || next === "]";
       e.preventDefault();
-      if (opens && closes) {
-        insertText("\n" + indent + extra + "\n" + indent, 0);
-        var p = s + 1 + indent.length + extra.length;
-        ta.setSelectionRange(p, p);
-      } else {
-        insertText("\n" + indent + extra, 0);
+      busyInsert = true;
+      try {
+        if (opens && closes) {
+          insertText("\n" + indent + extra + "\n" + indent, 0);
+          var p = s + 1 + indent.length + extra.length;
+          ta.setSelectionRange(p, p);
+        } else {
+          insertText("\n" + indent + extra, 0);
+        }
+      } finally {
+        busyInsert = false;
       }
     }
 
