@@ -1,0 +1,82 @@
+# flutter_build_apk_v3.yml からの差分:
+# - パッケージ名を com.lupargent.darteditor、プロジェクト名を darteditor に変更
+# - アプリ表示名(Android / Web)を "Dart Editor" に設定する処理を追加
+# - APKファイル名を darteditor-<番号>.apk に変更
+
+name: Build Dart Editor
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create scaffold if missing
+        run: |
+          if [ ! -d android ] || [ ! -d web ]; then
+            flutter create --platforms=android,web --org com.lupargent --project-name darteditor .
+          fi
+
+      - name: Set app display name
+        run: |
+          sed -i 's/android:label="[^"]*"/android:label="Dart Editor"/' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<title>.*</title>|<title>Dart Editor</title>|' web/index.html
+          sed -i 's|content="darteditor"|content="Dart Editor"|' web/index.html
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk darteditor-${{ github.run_number }}.apk
+          gh release create "build-${{ github.run_number }}" \
+            "darteditor-${{ github.run_number }}.apk" \
+            --title "Build ${{ github.run_number }}" \
+            --notes "Automated build from commit ${{ github.sha }}"
+
+      - name: Build web
+        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
