@@ -1,5 +1,6 @@
-# dart_editor_build_v1.yml からの差分:
-# - Flutterのバージョンを 3.38.x に固定(flutter_eval が最新のFlutterに追従できていないため)
+# dart_editor_build_v2.yml からの差分:
+# - APK/Webのビルドに --no-tree-shake-icons を追加
+#   (flutter_eval が実行時にアイコンを動的生成するため、アイコンの削減(tree shaking)を無効化)
 
 name: Build Dart Editor
 
@@ -49,7 +50,7 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
       - name: Publish APK to Releases
         env:
@@ -62,7 +63,7 @@ jobs:
             --notes "Automated build from commit ${{ github.sha }}"
 
       - name: Build web
-        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+        run: flutter build web --release --no-tree-shake-icons --base-href "/${{ github.event.repository.name }}/"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
