@@ -1,7 +1,8 @@
-// v4からの差分:
-// - 仮想デバイスの幅・高さを指定できるように変更
-// - 全画面表示のAppBarに「サイズ指定」ボタン(プリセット選択+数値入力)と「縦横入れ替え」ボタンを追加
-// - 指定したサイズはアプリに保存され、下部パネルの仮想デバイスにも反映される
+// v5からの差分:
+// - r''' や r""" など、rプレフィックス付きの三重引用符文字列が2行目以降も
+//   文字列の色になるように修正(シンタックスハイライトの正規表現)
+// - キーボード表示中は、下部のコンソール/仮想デバイスのパネルを非表示にして
+//   コードが隠れないように変更(パネルの状態は保持される)
 
 import 'dart:async';
 import 'dart:convert';
@@ -473,7 +474,7 @@ class DartCodeController extends TextEditingController {
 
   static final RegExp _token = RegExp(
     r'(//[^\n]*|/\*[\s\S]*?(?:\*/|$))'
-    r'|(\x27\x27\x27[\s\S]*?(?:\x27\x27\x27|$)|\x22\x22\x22[\s\S]*?(?:\x22\x22\x22|$)|r?\x27(?:\\.|[^\x27\\\n])*\x27?|r?\x22(?:\\.|[^\x22\\\n])*\x22?)'
+    r'|(r?\x27\x27\x27[\s\S]*?(?:\x27\x27\x27|$)|r?\x22\x22\x22[\s\S]*?(?:\x22\x22\x22|$)|r?\x27(?:\\.|[^\x27\\\n])*\x27?|r?\x22(?:\\.|[^\x22\\\n])*\x22?)'
     r'|(@[A-Za-z_]\w*)'
     r'|(\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)'
     r'|([A-Za-z_$][A-Za-z0-9_$]*)',
@@ -1013,6 +1014,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     final name = _current;
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
     return Scaffold(
       appBar: AppBar(
         title: Text(name, style: const TextStyle(fontSize: 16)),
@@ -1109,7 +1111,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               },
             ),
           ),
-          if (_output != null) _buildPanel(),
+          if (_output != null)
+            Offstage(offstage: keyboardOpen, child: _buildPanel()),
         ],
       ),
     );
