@@ -1,7 +1,15 @@
+// v1からの差分:
+// - dart_eval によるDartコードの実行機能を追加(AppBarの▶ボタン)
+// - 実行結果を表示するコンソール欄を追加(閉じるボタン付き、選択コピー可)
+// - 実行は compute で別Isolateに逃がし、10秒でタイムアウト(Webは同一スレッド)
+// - サンプルコードを dart_eval で動く内容に変更
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:dart_eval/dart_eval.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -12,12 +20,14 @@ void main() {
 }
 
 const String _sampleCode = r'''// Dart Editor へようこそ
-import 'dart:math';
+// 右上の ▶ ボタンで実行できます
 
 class Counter {
   int value = 0;
 
-  void increment() => value++;
+  void increment() {
+    value++;
+  }
 }
 
 void main() {
@@ -26,10 +36,45 @@ void main() {
     print('Hello, $name!');
   }
 
-  final c = Counter()..increment();
-  print('count = ${c.value}, pi = ${pi.toStringAsFixed(2)}');
+  final c = Counter();
+  c.increment();
+  c.increment();
+  print('count = ${c.value}');
+
+  var sum = 0;
+  for (var i = 1; i <= 10; i++) {
+    sum += i;
+  }
+  print('1から10の合計 = $sum');
 }
 ''';
+
+/// ソースを実行し、コンソール出力を文字列で返す(compute用のトップレベル関数)
+String _evalEntry(String source) {
+  final out = StringBuffer();
+  try {
+    runZoned(
+      () {
+        final result = eval(source, function: 'main');
+        if (result != null) {
+          out.writeln('=> $result');
+        }
+      },
+      zoneSpecification: ZoneSpecification(
+        print: (self, parent, zone, line) {
+          out.writeln(line);
+        },
+      ),
+    );
+  } catch (e) {
+    var msg = e.toString();
+    if (msg.length > 1000) {
+      msg = '${msg.substring(0, 1000)}...';
+    }
+    out.writeln('エラー: $msg');
+  }
+  return out.toString();
+}
 
 // ---------------------------------------------------------------------------
 // カラー定義
@@ -239,6 +284,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _fontSize = 14;
   bool _loaded = false;
   Timer? _saveTimer;
+  String? _output;
+  bool _running = false;
 
   @override
   void initState() {
@@ -402,9 +449,92 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _saveNow();
   }
 
+  Future<void> _run() async {
+    if (_running) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    final source = _files[_current] ?? '';
+    setState(() {
+      _running = true;
+      _output = '実行中...';
+    });
+    await Future.delayed(const Duration(milliseconds: 80));
+    String result;
+    try {
+      result = await compute(_evalEntry, source).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => 'タイムアウト(10秒)で中断しました',
+      );
+    } catch (e) {
+      result = 'エラー: $e';
+    }
+    if (!mounted) return;
+    setState(() {
+      _running = false;
+      _output = result.isEmpty ? '(出力なし)' : result;
+    });
+  }
+
   Future<void> _copyAll() async {
     await Clipboard.setData(ClipboardData(text: _files[_current] ?? ''));
     if (mounted) _snack('全文をコピーしました');
+  }
+
+  Widget _buildConsole() {
+    return Container(
+      height: 180,
+      width: double.infinity,
+      color: const Color(0xFF181818),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 32,
+            color: _C.bar,
+            padding: const EdgeInsets.only(left: 12),
+            child: Row(
+              children: [
+                const Text(
+                  'コンソール',
+                  style: TextStyle(fontSize: 13, color: _C.gutter),
+                ),
+                if (_running) ...[
+                  const SizedBox(width: 8),
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+                const Spacer(),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  icon: const Icon(Icons.close),
+                  onPressed: () => setState(() => _output = null),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(12),
+              child: SizedBox(
+                width: double.infinity,
+                child: SelectableText(
+                  _output ?? '',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: _fontSize,
+                    color: _C.text,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -418,6 +548,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       appBar: AppBar(
         title: Text(name, style: const TextStyle(fontSize: 16)),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.play_arrow, color: Colors.greenAccent),
+            tooltip: '実行',
+            onPressed: _running ? null : _run,
+          ),
           IconButton(
             icon: const Icon(Icons.text_decrease),
             tooltip: '文字を小さく',
@@ -484,14 +619,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ),
       ),
-      body: EditorView(
-        key: ValueKey(name),
-        initialText: _files[name] ?? '',
-        fontSize: _fontSize,
-        onChanged: (t) {
-          _files[name] = t;
-          _scheduleSave();
-        },
+      body: Column(
+        children: [
+          Expanded(
+            child: EditorView(
+              key: ValueKey(name),
+              initialText: _files[name] ?? '',
+              fontSize: _fontSize,
+              onChanged: (t) {
+                _files[name] = t;
+                _scheduleSave();
+              },
+            ),
+          ),
+          if (_output != null) _buildConsole(),
+        ],
       ),
     );
   }
