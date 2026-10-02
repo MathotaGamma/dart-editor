@@ -1,7 +1,7 @@
-// v3からの差分:
-// - EvalWidget を CompilerWidget に変更
-//   (EvalWidget はリリースビルドだとコンパイル済みファイル(assetPath)が必要なため。
-//    CompilerWidget は常に実行時にコンパイルして実行する)
+// v4からの差分:
+// - 仮想デバイスの幅・高さを指定できるように変更
+// - 全画面表示のAppBarに「サイズ指定」ボタン(プリセット選択+数値入力)と「縦横入れ替え」ボタンを追加
+// - 指定したサイズはアプリに保存され、下部パネルの仮想デバイスにも反映される
 
 import 'dart:async';
 import 'dart:convert';
@@ -161,18 +161,22 @@ String? _wrapForPreview(String src) {
 
 /// スマホ型のフレームの中にFlutterコードの実行結果を表示する
 class _DeviceFrame extends StatelessWidget {
-  const _DeviceFrame({super.key, required this.source});
+  const _DeviceFrame({
+    super.key,
+    required this.source,
+    this.width = 360,
+    this.height = 760,
+  });
 
   final String source;
-
-  static const double _w = 360;
-  static const double _h = 760;
+  final double width;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
     return Center(
       child: AspectRatio(
-        aspectRatio: _w / _h,
+        aspectRatio: width / height,
         child: Container(
           padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
@@ -185,11 +189,11 @@ class _DeviceFrame extends StatelessWidget {
             child: FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
-                width: _w,
-                height: _h,
+                width: width,
+                height: height,
                 child: MediaQuery(
                   data: MediaQuery.of(context).copyWith(
-                    size: const Size(_w, _h),
+                    size: Size(width, height),
                     padding: EdgeInsets.zero,
                     viewInsets: EdgeInsets.zero,
                     viewPadding: EdgeInsets.zero,
@@ -211,20 +215,199 @@ class _DeviceFrame extends StatelessWidget {
   }
 }
 
+/// 仮想デバイスのサイズ プリセット
+class _Preset {
+  const _Preset(this.name, this.w, this.h);
+
+  final String name;
+  final double w;
+  final double h;
+}
+
+const List<_Preset> _presets = [
+  _Preset('標準スマホ', 360, 760),
+  _Preset('iPhone SE', 375, 667),
+  _Preset('iPhone 15', 393, 852),
+  _Preset('Pixel', 412, 915),
+  _Preset('小型タブレット', 600, 960),
+  _Preset('iPad', 820, 1180),
+];
+
 /// 仮想デバイスの全画面表示
-class _DevicePage extends StatelessWidget {
-  const _DevicePage({required this.source});
+class _DevicePage extends StatefulWidget {
+  const _DevicePage({
+    required this.source,
+    required this.width,
+    required this.height,
+    required this.onSizeChanged,
+  });
 
   final String source;
+  final double width;
+  final double height;
+  final void Function(double w, double h) onSizeChanged;
+
+  @override
+  State<_DevicePage> createState() => _DevicePageState();
+}
+
+class _DevicePageState extends State<_DevicePage> {
+  late double _w = widget.width;
+  late double _h = widget.height;
+
+  void _apply(double w, double h) {
+    setState(() {
+      _w = w;
+      _h = h;
+    });
+    widget.onSizeChanged(w, h);
+  }
+
+  Future<void> _edit() async {
+    final r = await showDialog<Size>(
+      context: context,
+      builder: (_) => _SizeDialog(width: _w, height: _h),
+    );
+    if (r != null) _apply(r.width, r.height);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('仮想デバイス')),
+      appBar: AppBar(
+        title: Text('仮想デバイス  ${_w.round()} × ${_h.round()}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.screen_rotation),
+            tooltip: '縦横を入れ替え',
+            onPressed: () => _apply(_h, _w),
+          ),
+          IconButton(
+            icon: const Icon(Icons.aspect_ratio),
+            tooltip: 'サイズを指定',
+            onPressed: _edit,
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: _DeviceFrame(source: source),
+        child: _DeviceFrame(
+          source: widget.source,
+          width: _w,
+          height: _h,
+        ),
       ),
+    );
+  }
+}
+
+/// サイズ指定ダイアログ(プリセット + 数値入力)
+class _SizeDialog extends StatefulWidget {
+  const _SizeDialog({required this.width, required this.height});
+
+  final double width;
+  final double height;
+
+  @override
+  State<_SizeDialog> createState() => _SizeDialogState();
+}
+
+class _SizeDialogState extends State<_SizeDialog> {
+  late final TextEditingController _wc =
+      TextEditingController(text: widget.width.round().toString());
+  late final TextEditingController _hc =
+      TextEditingController(text: widget.height.round().toString());
+
+  @override
+  void dispose() {
+    _wc.dispose();
+    _hc.dispose();
+    super.dispose();
+  }
+
+  void _usePreset(_Preset p) {
+    setState(() {
+      _wc.text = p.w.round().toString();
+      _hc.text = p.h.round().toString();
+    });
+  }
+
+  void _ok() {
+    final w = double.tryParse(_wc.text.trim());
+    final h = double.tryParse(_hc.text.trim());
+    if (w == null || h == null) return;
+    Navigator.pop(
+      context,
+      Size(
+        w.clamp(200.0, 2000.0).toDouble(),
+        h.clamp(200.0, 3000.0).toDouble(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('デバイスのサイズ'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final p in _presets)
+                  ActionChip(
+                    label: Text(p.name),
+                    onPressed: () => _usePreset(p),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _wc,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: '幅 (width)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _hc,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: '高さ (height)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '幅は200〜2000、高さは200〜3000の範囲で指定できます',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('キャンセル'),
+        ),
+        TextButton(onPressed: _ok, child: const Text('OK')),
+      ],
     );
   }
 }
@@ -442,6 +625,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _panelTab = 0;
   String? _previewSource;
   int _runId = 0;
+  double _deviceW = 360;
+  double _deviceH = 760;
 
   @override
   void initState() {
@@ -490,6 +675,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _files = files;
       _current = current;
       _fontSize = prefs.getDouble('fontSize') ?? 14;
+      _deviceW = prefs.getDouble('deviceW') ?? 360;
+      _deviceH = prefs.getDouble('deviceH') ?? 760;
       _loaded = true;
     });
   }
@@ -501,6 +688,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     p.setString('files', jsonEncode(_files));
     p.setString('current', _current);
     p.setDouble('fontSize', _fontSize);
+    p.setDouble('deviceW', _deviceW);
+    p.setDouble('deviceH', _deviceH);
   }
 
   void _scheduleSave() {
@@ -733,7 +922,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     return Padding(
       padding: const EdgeInsets.all(8),
-      child: _DeviceFrame(key: ValueKey(_runId), source: src),
+      child: _DeviceFrame(
+        key: ValueKey(_runId),
+        source: src,
+        width: _deviceW,
+        height: _deviceH,
+      ),
     );
   }
 
@@ -777,7 +971,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     onPressed: () {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => _DevicePage(source: src),
+                          builder: (_) => _DevicePage(
+                            source: src,
+                            width: _deviceW,
+                            height: _deviceH,
+                            onSizeChanged: (w, h) {
+                              setState(() {
+                                _deviceW = w;
+                                _deviceH = h;
+                              });
+                              _saveNow();
+                            },
+                          ),
                         ),
                       );
                     },
