@@ -1,9 +1,7 @@
-// v2からの差分:
-// - 仮想デバイス機能を追加(flutter_eval)。runApp を含むFlutterコードを▶で実行すると、
-//   画面下のパネル「仮想デバイス」タブにスマホ型のフレームで表示される
-// - 下部パネルを「コンソール」「仮想デバイス」のタブ切り替えに変更(全画面表示ボタン付き)
-// - ドロワーに「Flutterサンプルを追加」を追加
-// - runApp を含まないコードは、これまで通りコンソールで実行
+// v3からの差分:
+// - EvalWidget を CompilerWidget に変更
+//   (EvalWidget はリリースビルドだとコンパイル済みファイル(assetPath)が必要なため。
+//    CompilerWidget は常に実行時にコンパイルして実行する)
 
 import 'dart:async';
 import 'dart:convert';
@@ -13,7 +11,7 @@ import 'package:dart_eval/dart_eval.dart' show Compiler, eval;
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_eval/flutter_eval.dart' show EvalWidget, flutterEvalPlugin;
+import 'package:flutter_eval/flutter_eval.dart' show CompilerWidget, flutterEvalPlugin;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -196,7 +194,7 @@ class _DeviceFrame extends StatelessWidget {
                     viewInsets: EdgeInsets.zero,
                     viewPadding: EdgeInsets.zero,
                   ),
-                  child: EvalWidget(
+                  child: CompilerWidget(
                     packages: {
                       'preview': {'main.dart': source},
                     },
