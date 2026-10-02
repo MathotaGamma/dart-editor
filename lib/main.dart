@@ -1,13 +1,6 @@
-// v9からの差分(v10は使用しません):
-// - Web版では、コード欄を Flutter の TextField ではなく、ブラウザ標準の <textarea> を使う
-//   WebCodeEditor(web_code_editor_web.dart)に置き換えた。
-//   iPadのSafariで、タッチ位置とカーソル位置がずれる問題と、キーボードが閉じる問題を避けるため。
-//   (入力・カーソル・選択・スクロール・記号バー・色分けはブラウザ側で動く。横スクロールも復活)
-// - Android/iOS などWeb以外では、これまで通り EditorView を使う
-// - ドロワーやダイアログが開いている間は、Web版エディタがタッチを受け付けないようにする
-//   (Flutterの画面が上に重なっても、下の入力欄がタッチを奪わないため)
-// - 新規ファイルが2つ必要:
-//   lib/web_code_editor_stub.dart, lib/web_code_editor_web.dart
+// v11からの差分:
+// - Web以外(APK)のコード欄の行番号ずれを修正
+//   折り返し行数の計算に、端末の文字サイズ設定(textScaler)が反映されていなかったため
 
 import 'dart:async';
 import 'dart:convert';
@@ -1324,27 +1317,36 @@ class _EditorViewState extends State<EditorView> {
     }
   }
 
-  double _charWidth(TextStyle style) {
-    if (_cachedFontSize != widget.fontSize) {
+  double _charWidth(TextStyle style, TextScaler scaler) {
+    final scaleKey = scaler.scale(widget.fontSize);
+    if (_cachedFontSize != scaleKey) {
       final tp = TextPainter(
         text: TextSpan(text: 'MMMMMMMMMM', style: style),
+        textScaler: scaler,
         textDirection: TextDirection.ltr,
       )..layout();
       _cachedCharWidth = tp.width / 10;
-      _cachedFontSize = widget.fontSize;
+      _cachedFontSize = scaleKey;
       tp.dispose();
     }
     return _cachedCharWidth;
   }
 
   /// 1つの論理行が折り返されて何行分の高さになるか
-  int _visualLines(String line, TextStyle style, StrutStyle strut, double width) {
+  int _visualLines(
+    String line,
+    TextStyle style,
+    StrutStyle strut,
+    double width,
+    TextScaler scaler,
+  ) {
     if (line.isEmpty) return 1;
     final cached = _wrapCache[line];
     if (cached != null) return cached;
     final tp = TextPainter(
       text: TextSpan(text: line, style: style),
       strutStyle: strut,
+      textScaler: scaler,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: width);
     final n = math.max(1, tp.computeLineMetrics().length);
@@ -1385,7 +1387,8 @@ class _EditorViewState extends State<EditorView> {
       height: _lineHeight,
       forceStrutHeight: true,
     );
-    final cw = _charWidth(style);
+    final scaler = MediaQuery.textScalerOf(context);
+    final cw = _charWidth(style, scaler);
 
     return Column(
       children: [
@@ -1407,7 +1410,7 @@ class _EditorViewState extends State<EditorView> {
                         c.maxWidth - gutterW - _textPadding.horizontal - _caretMargin,
                       );
 
-                      final cacheKey = '${textW.toStringAsFixed(1)}|$fs';
+                      final cacheKey = '${textW.toStringAsFixed(1)}|${scaler.scale(fs)}';
                       if (cacheKey != _wrapCacheKey || _wrapCache.length > 5000) {
                         _wrapCache.clear();
                         _wrapCacheKey = cacheKey;
@@ -1416,7 +1419,7 @@ class _EditorViewState extends State<EditorView> {
                       final labels = <String>[];
                       for (var i = 0; i < lines.length; i++) {
                         labels.add('${i + 1}');
-                        final extra = _visualLines(lines[i], style, strut, textW) - 1;
+                        final extra = _visualLines(lines[i], style, strut, textW, scaler) - 1;
                         for (var k = 0; k < extra; k++) {
                           labels.add('');
                         }
