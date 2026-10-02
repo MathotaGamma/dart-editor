@@ -1,7 +1,5 @@
-# flutter_build_apk_v3.yml からの差分:
-# - パッケージ名を com.lupargent.darteditor、プロジェクト名を darteditor に変更
-# - アプリ表示名(Android / Web)を "Dart Editor" に設定する処理を追加
-# - APKファイル名を darteditor-<番号>.apk に変更
+# dart_editor_build_v1.yml からの差分:
+# - Flutterのバージョンを 3.38.x に固定(flutter_eval が最新のFlutterに追従できていないため)
 
 name: Build Dart Editor
 
@@ -31,6 +29,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.38.x"
           channel: stable
           cache: true
 
