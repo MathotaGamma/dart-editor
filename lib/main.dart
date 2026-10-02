@@ -1,17 +1,19 @@
-// v1からの差分:
-// - dart_eval によるDartコードの実行機能を追加(AppBarの▶ボタン)
-// - 実行結果を表示するコンソール欄を追加(閉じるボタン付き、選択コピー可)
-// - 実行は compute で別Isolateに逃がし、10秒でタイムアウト(Webは同一スレッド)
-// - サンプルコードを dart_eval で動く内容に変更
+// v2からの差分:
+// - 仮想デバイス機能を追加(flutter_eval)。runApp を含むFlutterコードを▶で実行すると、
+//   画面下のパネル「仮想デバイス」タブにスマホ型のフレームで表示される
+// - 下部パネルを「コンソール」「仮想デバイス」のタブ切り替えに変更(全画面表示ボタン付き)
+// - ドロワーに「Flutterサンプルを追加」を追加
+// - runApp を含まないコードは、これまで通りコンソールで実行
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:dart_eval/dart_eval.dart';
+import 'package:dart_eval/dart_eval.dart' show Compiler, eval;
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_eval/flutter_eval.dart' show EvalWidget, flutterEvalPlugin;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -74,6 +76,159 @@ String _evalEntry(String source) {
     out.writeln('エラー: $msg');
   }
   return out.toString();
+}
+
+const String _flutterSample = r'''import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: const CounterPage(),
+    );
+  }
+}
+
+class CounterPage extends StatefulWidget {
+  const CounterPage({Key? key}) : super(key: key);
+
+  @override
+  State<CounterPage> createState() => CounterPageState();
+}
+
+class CounterPageState extends State<CounterPage> {
+  int count = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('カウンター')),
+      body: Center(
+        child: Text('$count', style: const TextStyle(fontSize: 48)),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          setState(() {
+            count++;
+          });
+        },
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+''';
+
+/// runApp(...) を含むコードを、プレビュー用に変換する。
+/// runApp の引数を取り出して devicePreviewRoot() として定義し直し、
+/// 元の runApp 呼び出しは null に置き換える。runApp がなければ null を返す。
+String? _wrapForPreview(String src) {
+  final m = RegExp(r'\brunApp\s*\(').firstMatch(src);
+  if (m == null) return null;
+
+  var depth = 1;
+  var i = m.end;
+  String? quote;
+  while (i < src.length && depth > 0) {
+    final ch = src[i];
+    if (quote != null) {
+      if (ch == '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch == quote) quote = null;
+    } else if (ch == "'" || ch == '"') {
+      quote = ch;
+    } else if (ch == '(') {
+      depth++;
+    } else if (ch == ')') {
+      depth--;
+    }
+    i++;
+  }
+  if (depth != 0) return null;
+
+  final expr = src.substring(m.end, i - 1).trim();
+  if (expr.isEmpty) return null;
+
+  final replaced = src.replaceRange(m.start, i, 'null');
+  return '$replaced\n\nWidget devicePreviewRoot() {\n  return $expr;\n}\n';
+}
+
+/// スマホ型のフレームの中にFlutterコードの実行結果を表示する
+class _DeviceFrame extends StatelessWidget {
+  const _DeviceFrame({super.key, required this.source});
+
+  final String source;
+
+  static const double _w = 360;
+  static const double _h = 760;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _w / _h,
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: Colors.grey.shade700, width: 2),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: _w,
+                height: _h,
+                child: MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    size: const Size(_w, _h),
+                    padding: EdgeInsets.zero,
+                    viewInsets: EdgeInsets.zero,
+                    viewPadding: EdgeInsets.zero,
+                  ),
+                  child: EvalWidget(
+                    packages: {
+                      'preview': {'main.dart': source},
+                    },
+                    library: 'package:preview/main.dart',
+                    function: 'devicePreviewRoot',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 仮想デバイスの全画面表示
+class _DevicePage extends StatelessWidget {
+  const _DevicePage({required this.source});
+
+  final String source;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('仮想デバイス')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: _DeviceFrame(source: source),
+      ),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +441,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _saveTimer;
   String? _output;
   bool _running = false;
+  int _panelTab = 0;
+  String? _previewSource;
+  int _runId = 0;
 
   @override
   void initState() {
@@ -453,11 +611,43 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (_running) return;
     FocusManager.instance.primaryFocus?.unfocus();
     final source = _files[_current] ?? '';
+    final wrapped = _wrapForPreview(source);
     setState(() {
       _running = true;
+      _panelTab = 0;
       _output = '実行中...';
     });
     await Future.delayed(const Duration(milliseconds: 80));
+
+    // runApp を含むFlutterコード: 仮想デバイスに表示
+    if (wrapped != null) {
+      String? error;
+      try {
+        final compiler = Compiler()..addPlugin(flutterEvalPlugin);
+        compiler.compile({
+          'preview': {'main.dart': wrapped},
+        });
+      } catch (e) {
+        error = e.toString();
+      }
+      if (!mounted) return;
+      final err = error;
+      setState(() {
+        _running = false;
+        if (err == null) {
+          _previewSource = wrapped;
+          _runId++;
+          _panelTab = 1;
+          _output = 'コンパイルに成功しました。仮想デバイスに表示しています。';
+        } else {
+          final msg = err.length > 1000 ? '${err.substring(0, 1000)}...' : err;
+          _output = 'エラー: $msg';
+        }
+      });
+      return;
+    }
+
+    // それ以外: コンソールで実行
     String result;
     try {
       result = await compute(_evalEntry, source).timeout(
@@ -474,29 +664,102 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
+  void _addFlutterSample() {
+    var name = 'flutter_sample.dart';
+    var i = 2;
+    while (_files.containsKey(name)) {
+      name = 'flutter_sample_$i.dart';
+      i++;
+    }
+    setState(() {
+      _files[name] = _flutterSample;
+      _current = name;
+    });
+    _saveNow();
+  }
+
   Future<void> _copyAll() async {
     await Clipboard.setData(ClipboardData(text: _files[_current] ?? ''));
     if (mounted) _snack('全文をコピーしました');
   }
 
-  Widget _buildConsole() {
+  Widget _tabButton(String label, int index) {
+    final selected = _panelTab == index;
+    return TextButton(
+      onPressed: () => setState(() => _panelTab = index),
+      style: TextButton.styleFrom(
+        foregroundColor: selected ? Colors.white : _C.gutter,
+        minimumSize: const Size(0, 32),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConsoleTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: SizedBox(
+        width: double.infinity,
+        child: SelectableText(
+          _output ?? '',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: _fontSize,
+            color: _C.text,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeviceTab() {
+    final src = _previewSource;
+    if (src == null) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            'runApp を含むFlutterのコードを ▶ で実行すると、ここに表示されます',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _C.gutter),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: _DeviceFrame(key: ValueKey(_runId), source: src),
+    );
+  }
+
+  Widget _buildPanel() {
+    final isDevice = _panelTab == 1;
+    final screenH = MediaQuery.of(context).size.height;
+    final height = isDevice ? (screenH * 0.5).clamp(260.0, 440.0).toDouble() : 180.0;
+    final src = _previewSource;
+
     return Container(
-      height: 180,
+      height: height,
       width: double.infinity,
       color: const Color(0xFF181818),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            height: 32,
+            height: 36,
             color: _C.bar,
-            padding: const EdgeInsets.only(left: 12),
+            padding: const EdgeInsets.only(left: 4),
             child: Row(
               children: [
-                const Text(
-                  'コンソール',
-                  style: TextStyle(fontSize: 13, color: _C.gutter),
-                ),
+                _tabButton('コンソール', 0),
+                _tabButton('仮想デバイス', 1),
                 if (_running) ...[
                   const SizedBox(width: 8),
                   const SizedBox(
@@ -506,10 +769,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ),
                 ],
                 const Spacer(),
+                if (isDevice && src != null)
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 20,
+                    tooltip: '全画面表示',
+                    icon: const Icon(Icons.fullscreen),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => _DevicePage(source: src),
+                        ),
+                      );
+                    },
+                  ),
                 IconButton(
                   padding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,
                   iconSize: 18,
+                  tooltip: '閉じる',
                   icon: const Icon(Icons.close),
                   onPressed: () => setState(() => _output = null),
                 ),
@@ -517,20 +796,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           ),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(12),
-              child: SizedBox(
-                width: double.infinity,
-                child: SelectableText(
-                  _output ?? '',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: _fontSize,
-                    color: _C.text,
-                  ),
-                ),
-              ),
-            ),
+            child: isDevice ? _buildDeviceTab() : _buildConsoleTab(),
           ),
         ],
       ),
@@ -608,6 +874,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
               const Divider(height: 1),
               ListTile(
+                leading: const Icon(Icons.phone_android),
+                title: const Text('Flutterサンプルを追加'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _addFlutterSample();
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.add),
                 title: const Text('新しいファイル'),
                 onTap: () {
@@ -632,7 +906,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               },
             ),
           ),
-          if (_output != null) _buildConsole(),
+          if (_output != null) _buildPanel(),
         ],
       ),
     );
