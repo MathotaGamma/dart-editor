@@ -1,6 +1,5 @@
-# dart_editor_build_v2.yml からの差分:
-# - APK/Webのビルドに --no-tree-shake-icons を追加
-#   (flutter_eval が実行時にアイコンを動的生成するため、アイコンの削減(tree shaking)を無効化)
+# dart_editor_build_v3.yml からの差分:
+# - 等幅フォント JetBrainsMono をダウンロードする手順を追加(pubspec.yaml の fonts が参照する)
 
 name: Build Dart Editor
 
@@ -45,6 +44,12 @@ jobs:
           sed -i 's/android:label="[^"]*"/android:label="Dart Editor"/' android/app/src/main/AndroidManifest.xml
           sed -i 's|<title>.*</title>|<title>Dart Editor</title>|' web/index.html
           sed -i 's|content="darteditor"|content="Dart Editor"|' web/index.html
+
+      - name: Download monospace font
+        run: |
+          mkdir -p assets/fonts
+          curl -fL --retry 3 -o assets/fonts/JetBrainsMono-Regular.ttf \
+            https://raw.githubusercontent.com/JetBrains/JetBrainsMono/master/fonts/ttf/JetBrainsMono-Regular.ttf
 
       - name: Install dependencies
         run: flutter pub get
