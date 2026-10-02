@@ -1,6 +1,6 @@
-# v2からの差分:
-# - 仮想デバイス表示用に flutter_eval を追加
-# - dart_eval のバージョン指定を any に変更(flutter_eval との競合を避けるため)
+# v3からの差分:
+# - flutter_eval を ^0.6.1 から ^0.8.2 に更新
+#   (0.6系は最新のFlutterでビルドエラーになるため)
 
 name: darteditor
 description: iPad/Android/Webで使えるDartコードエディタ
@@ -17,7 +17,7 @@ dependencies:
     sdk: flutter
   shared_preferences: ^2.2.0
   dart_eval: any
-  flutter_eval: ^0.6.1
+  flutter_eval: ^0.8.2
 
 flutter:
   uses-material-design: true
