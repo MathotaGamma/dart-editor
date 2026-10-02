@@ -1,6 +1,6 @@
-# v3からの差分:
-# - flutter_eval を ^0.6.1 から ^0.8.2 に更新
-#   (0.6系は最新のFlutterでビルドエラーになるため)
+# v4からの差分:
+# - 等幅フォント JetBrainsMono を登録(assets/fonts/JetBrainsMono-Regular.ttf)
+#   ※ファイルはワークフロー(dart_editor_build_v4.yml)がビルド時にダウンロードする
 
 name: darteditor
 description: iPad/Android/Webで使えるDartコードエディタ
@@ -21,3 +21,7 @@ dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
