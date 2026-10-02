@@ -1,8 +1,8 @@
-// v5からの差分:
-// - r''' や r""" など、rプレフィックス付きの三重引用符文字列が2行目以降も
-//   文字列の色になるように修正(シンタックスハイライトの正規表現)
-// - キーボード表示中は、下部のコンソール/仮想デバイスのパネルを非表示にして
-//   コードが隠れないように変更(パネルの状態は保持される)
+// v6からの差分:
+// - キーボード表示中にパネルを非表示にする方式をやめ、パネルを画面下部に固定
+//   (キーボードはパネルの上に重なる。パネルがキーボードに押し上げられない)
+// - エディタ(コード欄と記号バー)は、キーボードの上端に合わせて自動で縮む
+//   (パネルより上にキーボードが出る分だけ、エディタの下に余白を追加)
 
 import 'dart:async';
 import 'dart:convert';
@@ -932,10 +932,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  double _panelHeight() {
+    if (_panelTab == 1) {
+      final screenH = MediaQuery.of(context).size.height;
+      return (screenH * 0.5).clamp(260.0, 440.0).toDouble();
+    }
+    return 180.0;
+  }
+
   Widget _buildPanel() {
     final isDevice = _panelTab == 1;
-    final screenH = MediaQuery.of(context).size.height;
-    final height = isDevice ? (screenH * 0.5).clamp(260.0, 440.0).toDouble() : 180.0;
+    final height = _panelHeight();
     final src = _previewSource;
 
     return Container(
@@ -1014,8 +1021,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     final name = _current;
-    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final panelHeight = _output != null ? _panelHeight() : 0.0;
+    final editorBottomPad = math.max(0.0, keyboardHeight - panelHeight);
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Text(name, style: const TextStyle(fontSize: 16)),
         actions: [
@@ -1101,18 +1111,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       body: Column(
         children: [
           Expanded(
-            child: EditorView(
-              key: ValueKey(name),
-              initialText: _files[name] ?? '',
-              fontSize: _fontSize,
-              onChanged: (t) {
-                _files[name] = t;
-                _scheduleSave();
-              },
+            child: Padding(
+              padding: EdgeInsets.only(bottom: editorBottomPad),
+              child: MediaQuery(
+                data: MediaQuery.of(context).removeViewInsets(removeBottom: true),
+                child: EditorView(
+                  key: ValueKey(name),
+                  initialText: _files[name] ?? '',
+                  fontSize: _fontSize,
+                  onChanged: (t) {
+                    _files[name] = t;
+                    _scheduleSave();
+                  },
+                ),
+              ),
             ),
           ),
-          if (_output != null)
-            Offstage(offstage: keyboardOpen, child: _buildPanel()),
+          if (_output != null) _buildPanel(),
         ],
       ),
     );
