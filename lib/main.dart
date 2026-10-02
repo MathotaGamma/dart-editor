@@ -1,23 +1,28 @@
-// v6からの差分(v7, v8は使用しません。v6をベースに構造を作り直しました):
-// - 下部パネルをやめ、結果表示(コンソール/仮想デバイス)をエディタの高さと競合しない配置に変更
-//   ・横幅720px以上: エディタの右側に表示(左右分割)
-//   ・横幅720px未満: エディタ全体を覆う画面として表示(×で戻る)
-// - コード欄を、標準的な構成(1つの TextField が領域いっぱいに広がり、自前のスクロールを持つ)に変更
-//   ・外側のスクロール(縦横の入れ子)をやめた(カーソル位置のずれ、キーボードが閉じる問題の対策)
-//   ・横スクロールはなくなり、長い行は折り返して表示。行番号は折り返しに合わせて表示
-// - キーボード対応は Scaffold の標準動作(本体がキーボードの上に収まる)に統一
+// v9からの差分(v10は使用しません):
+// - Web版では、コード欄を Flutter の TextField ではなく、ブラウザ標準の <textarea> を使う
+//   WebCodeEditor(web_code_editor_web.dart)に置き換えた。
+//   iPadのSafariで、タッチ位置とカーソル位置がずれる問題と、キーボードが閉じる問題を避けるため。
+//   (入力・カーソル・選択・スクロール・記号バー・色分けはブラウザ側で動く。横スクロールも復活)
+// - Android/iOS などWeb以外では、これまで通り EditorView を使う
+// - ドロワーやダイアログが開いている間は、Web版エディタがタッチを受け付けないようにする
+//   (Flutterの画面が上に重なっても、下の入力欄がタッチを奪わないため)
+// - 新規ファイルが2つ必要:
+//   lib/web_code_editor_stub.dart, lib/web_code_editor_web.dart
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:dart_eval/dart_eval.dart' show Compiler, eval;
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_eval/flutter_eval.dart' show CompilerWidget, flutterEvalPlugin;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'web_code_editor_stub.dart'
+    if (dart.library.js_interop) 'web_code_editor_web.dart';
 
 void main() {
   runApp(const DartEditorApp());
@@ -629,6 +634,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _panelTab = 0;
   String? _previewSource;
   int _runId = 0;
+  bool _drawerOpen = false;
+  int _modalCount = 0;
   double _deviceW = 360;
   double _deviceH = 760;
 
@@ -713,9 +720,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// ダイアログ表示中は、Web版エディタのタッチを止める
+  Future<T?> _showModal<T>({required WidgetBuilder builder}) async {
+    setState(() => _modalCount++);
+    try {
+      return await showDialog<T>(context: context, builder: builder);
+    } finally {
+      if (mounted) setState(() => _modalCount--);
+    }
+  }
+
   Future<void> _newFile() async {
-    final raw = await showDialog<String>(
-      context: context,
+    final raw = await _showModal<String>(
       builder: (_) => const _NameDialog(title: '新しいファイル'),
     );
     if (raw == null || !mounted) return;
@@ -736,8 +752,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _renameFile(String old) async {
-    final raw = await showDialog<String>(
-      context: context,
+    final raw = await _showModal<String>(
       builder: (_) => _NameDialog(title: '名前を変更', initial: old),
     );
     if (raw == null || !mounted) return;
@@ -761,8 +776,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _deleteFile(String name) async {
-    final ok = await showDialog<bool>(
-      context: context,
+    final ok = await _showModal<bool>(
       builder: (ctx) => AlertDialog(
         title: const Text('ファイルを削除'),
         content: Text('「$name」を削除しますか?'),
@@ -1040,6 +1054,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
+      onDrawerChanged: (open) => setState(() => _drawerOpen = open),
       drawer: Drawer(
         child: SafeArea(
           child: Column(
@@ -1101,15 +1116,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         builder: (context, c) {
           final wide = c.maxWidth >= 720;
           final showPanel = _output != null;
-          final editor = EditorView(
-            key: ValueKey(name),
-            initialText: _files[name] ?? '',
-            fontSize: _fontSize,
-            onChanged: (t) {
-              _files[name] = t;
-              _scheduleSave();
-            },
-          );
+          void onChanged(String t) {
+            _files[name] = t;
+            _scheduleSave();
+          }
+
+          // Flutterの画面(ドロワー・ダイアログ・全面表示の結果)が重なる間は、
+          // Web版エディタ(ブラウザ標準の入力欄)がタッチを受け付けないようにする
+          final interactive =
+              !_drawerOpen && _modalCount == 0 && !(!wide && showPanel);
+
+          final Widget editor = kIsWeb
+              ? WebCodeEditor(
+                  key: ValueKey(name),
+                  initialText: _files[name] ?? '',
+                  fontSize: _fontSize,
+                  interactive: interactive,
+                  onChanged: onChanged,
+                )
+              : EditorView(
+                  key: ValueKey(name),
+                  initialText: _files[name] ?? '',
+                  fontSize: _fontSize,
+                  onChanged: onChanged,
+                );
 
           if (wide) {
             return Row(
