@@ -1,10 +1,11 @@
-// v6からの差分(v7は使用しません。v6に戻した上での修正です):
-// - パネルの表示/非表示を、キーボードの高さ(viewInsets)ではなく
-//   「コード欄にフォーカスがあるか」で切り替えるように変更
-//   (キーボードの開閉とレイアウトが連動しないため、キーボードが勝手に閉じるループが起きない)
-// - Scaffold の標準のキーボード対応(本体がキーボードの上に収まる)を使う
-//   (カーソル位置とタッチ位置がずれる問題の対策)
-// - コード欄のFocusNodeをHomePageで保持し、EditorViewに渡す
+// v6からの差分(v7, v8は使用しません。v6をベースに構造を作り直しました):
+// - 下部パネルをやめ、結果表示(コンソール/仮想デバイス)をエディタの高さと競合しない配置に変更
+//   ・横幅720px以上: エディタの右側に表示(左右分割)
+//   ・横幅720px未満: エディタ全体を覆う画面として表示(×で戻る)
+// - コード欄を、標準的な構成(1つの TextField が領域いっぱいに広がり、自前のスクロールを持つ)に変更
+//   ・外側のスクロール(縦横の入れ子)をやめた(カーソル位置のずれ、キーボードが閉じる問題の対策)
+//   ・横スクロールはなくなり、長い行は折り返して表示。行番号は折り返しに合わせて表示
+// - キーボード対応は Scaffold の標準動作(本体がキーボードの上に収まる)に統一
 
 import 'dart:async';
 import 'dart:convert';
@@ -623,7 +624,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _fontSize = 14;
   bool _loaded = false;
   Timer? _saveTimer;
-  final FocusNode _editorFocus = FocusNode();
   String? _output;
   bool _running = false;
   int _panelTab = 0;
@@ -636,12 +636,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _editorFocus.addListener(_onEditorFocusChanged);
     _load();
-  }
-
-  void _onEditorFocusChanged() {
-    if (mounted) setState(() {});
   }
 
   @override
@@ -649,8 +644,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _saveTimer?.cancel();
     _saveNow();
-    _editorFocus.removeListener(_onEditorFocusChanged);
-    _editorFocus.dispose();
     super.dispose();
   }
 
@@ -944,12 +937,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _buildPanel() {
     final isDevice = _panelTab == 1;
-    final screenH = MediaQuery.of(context).size.height;
-    final height = isDevice ? (screenH * 0.5).clamp(260.0, 440.0).toDouble() : 180.0;
     final src = _previewSource;
 
     return Container(
-      height: height,
       width: double.infinity,
       color: const Color(0xFF181818),
       child: Column(
@@ -1107,23 +1097,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: EditorView(
-              key: ValueKey(name),
-              focusNode: _editorFocus,
-              initialText: _files[name] ?? '',
-              fontSize: _fontSize,
-              onChanged: (t) {
-                _files[name] = t;
-                _scheduleSave();
-              },
-            ),
-          ),
-          if (_output != null)
-            Offstage(offstage: _editorFocus.hasFocus, child: _buildPanel()),
-        ],
+      body: LayoutBuilder(
+        builder: (context, c) {
+          final wide = c.maxWidth >= 720;
+          final showPanel = _output != null;
+          final editor = EditorView(
+            key: ValueKey(name),
+            initialText: _files[name] ?? '',
+            fontSize: _fontSize,
+            onChanged: (t) {
+              _files[name] = t;
+              _scheduleSave();
+            },
+          );
+
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: editor),
+                if (showPanel)
+                  Container(
+                    width: math.min(480.0, c.maxWidth * 0.45),
+                    decoration: const BoxDecoration(
+                      border: Border(left: BorderSide(color: Colors.white24)),
+                    ),
+                    child: _buildPanel(),
+                  ),
+              ],
+            );
+          }
+
+          return Stack(
+            children: [
+              Positioned.fill(child: editor),
+              if (showPanel) Positioned.fill(child: _buildPanel()),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1223,13 +1234,11 @@ const List<_Sym> _symbols = [
 class EditorView extends StatefulWidget {
   const EditorView({
     super.key,
-    required this.focusNode,
     required this.initialText,
     required this.fontSize,
     required this.onChanged,
   });
 
-  final FocusNode focusNode;
   final String initialText;
   final double fontSize;
   final ValueChanged<String> onChanged;
@@ -1240,10 +1249,20 @@ class EditorView extends StatefulWidget {
 
 class _EditorViewState extends State<EditorView> {
   static const double _lineHeight = 1.45;
+  static const EdgeInsets _textPadding = EdgeInsets.fromLTRB(6, 12, 8, 12);
+
+  // RenderEditable が折り返し幅から差し引く余白(カーソル幅2 + 隙間1)
+  static const double _caretMargin = 3;
 
   late final DartCodeController _controller;
   final UndoHistoryController _undo = UndoHistoryController();
+  final FocusNode _focus = FocusNode();
+  final ScrollController _scroll = ScrollController();
+  final ScrollController _gutterScroll = ScrollController();
+  final List<TextInputFormatter> _formatters = [_AutoIndentFormatter()];
 
+  final Map<String, int> _wrapCache = {};
+  String _wrapCacheKey = '';
   double _cachedFontSize = -1;
   double _cachedCharWidth = 8;
 
@@ -1251,13 +1270,28 @@ class _EditorViewState extends State<EditorView> {
   void initState() {
     super.initState();
     _controller = DartCodeController(text: widget.initialText);
+    _scroll.addListener(_syncGutter);
   }
 
   @override
   void dispose() {
+    _scroll.removeListener(_syncGutter);
     _controller.dispose();
     _undo.dispose();
+    _focus.dispose();
+    _scroll.dispose();
+    _gutterScroll.dispose();
     super.dispose();
+  }
+
+  /// コード欄のスクロール位置に、行番号の列を合わせる
+  void _syncGutter() {
+    if (!_scroll.hasClients || !_gutterScroll.hasClients) return;
+    final max = _gutterScroll.position.maxScrollExtent;
+    final target = _scroll.offset.clamp(0.0, max).toDouble();
+    if ((_gutterScroll.offset - target).abs() > 0.5) {
+      _gutterScroll.jumpTo(target);
+    }
   }
 
   double _charWidth(TextStyle style) {
@@ -1268,8 +1302,25 @@ class _EditorViewState extends State<EditorView> {
       )..layout();
       _cachedCharWidth = tp.width / 10;
       _cachedFontSize = widget.fontSize;
+      tp.dispose();
     }
     return _cachedCharWidth;
+  }
+
+  /// 1つの論理行が折り返されて何行分の高さになるか
+  int _visualLines(String line, TextStyle style, StrutStyle strut, double width) {
+    if (line.isEmpty) return 1;
+    final cached = _wrapCache[line];
+    if (cached != null) return cached;
+    final tp = TextPainter(
+      text: TextSpan(text: line, style: style),
+      strutStyle: strut,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width);
+    final n = math.max(1, tp.computeLineMetrics().length);
+    tp.dispose();
+    _wrapCache[line] = n;
+    return n;
   }
 
   void _insert(String s, {int back = 0}) {
@@ -1304,94 +1355,106 @@ class _EditorViewState extends State<EditorView> {
       height: _lineHeight,
       forceStrutHeight: true,
     );
+    final cw = _charWidth(style);
 
     return Column(
       children: [
         Expanded(
           child: LayoutBuilder(
             builder: (context, c) {
-              return ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _controller,
-                builder: (context, value, _) {
-                  final lines = value.text.split('\n');
-                  var maxLen = 0;
-                  for (final l in lines) {
-                    if (l.length > maxLen) maxLen = l.length;
-                  }
-                  final cw = _charWidth(style);
-                  final digits = math.max(2, lines.length.toString().length);
-                  final gutterW = digits * cw + 22;
-                  final contentW = math.max(
-                    c.maxWidth - gutterW,
-                    (maxLen + 6) * cw + 24,
-                  );
-                  final numbers = List.generate(
-                    lines.length,
-                    (i) => '${i + 1}',
-                  ).join('\n');
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 行番号
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _controller,
+                    builder: (context, value, _) {
+                      final lines = value.text.split('\n');
+                      final digits = math.max(2, lines.length.toString().length);
+                      final gutterW = digits * cw + 22;
+                      final textW = math.max(
+                        1.0,
+                        c.maxWidth - gutterW - _textPadding.horizontal - _caretMargin,
+                      );
 
-                  return SingleChildScrollView(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.focusNode.requestFocus(),
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(minHeight: c.maxHeight),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(
-                              width: gutterW,
+                      final cacheKey = '${textW.toStringAsFixed(1)}|$fs';
+                      if (cacheKey != _wrapCacheKey || _wrapCache.length > 5000) {
+                        _wrapCache.clear();
+                        _wrapCacheKey = cacheKey;
+                      }
+
+                      final labels = <String>[];
+                      for (var i = 0; i < lines.length; i++) {
+                        labels.add('${i + 1}');
+                        final extra = _visualLines(lines[i], style, strut, textW) - 1;
+                        for (var k = 0; k < extra; k++) {
+                          labels.add('');
+                        }
+                      }
+                      WidgetsBinding.instance.addPostFrameCallback((_) => _syncGutter());
+
+                      return SizedBox(
+                        width: gutterW,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            top: _textPadding.top,
+                            bottom: _textPadding.bottom,
+                          ),
+                          child: IgnorePointer(
+                            child: SingleChildScrollView(
+                              controller: _gutterScroll,
+                              physics: const NeverScrollableScrollPhysics(),
                               child: Padding(
-                                padding: const EdgeInsets.fromLTRB(0, 12, 10, 80),
-                                child: Text(
-                                  numbers,
-                                  textAlign: TextAlign.right,
-                                  style: style.copyWith(color: _C.gutter),
-                                  strutStyle: strut,
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
+                                padding: const EdgeInsets.only(right: 10),
                                 child: SizedBox(
-                                  width: contentW,
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(4, 12, 0, 80),
-                                    child: TextField(
-                                      controller: _controller,
-                                      focusNode: widget.focusNode,
-                                      undoController: _undo,
-                                      maxLines: null,
-                                      keyboardType: TextInputType.multiline,
-                                      autocorrect: false,
-                                      smartDashesType: SmartDashesType.disabled,
-                                      smartQuotesType: SmartQuotesType.disabled,
-                                      style: style,
-                                      strutStyle: strut,
-                                      cursorColor: Colors.white,
-                                      inputFormatters: [_AutoIndentFormatter()],
-                                      decoration: const InputDecoration(
-                                        isDense: true,
-                                        border: InputBorder.none,
-                                        contentPadding: EdgeInsets.zero,
-                                      ),
-                                      onChanged: widget.onChanged,
-                                    ),
+                                  width: double.infinity,
+                                  child: Text(
+                                    labels.join('\n'),
+                                    textAlign: TextAlign.right,
+                                    style: style.copyWith(color: _C.gutter),
+                                    strutStyle: strut,
                                   ),
                                 ),
                               ),
                             ),
-                          ],
+                          ),
                         ),
+                      );
+                    },
+                  ),
+                  // コード欄(領域いっぱいに広がり、自前でスクロールする)
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _focus,
+                      scrollController: _scroll,
+                      undoController: _undo,
+                      expands: true,
+                      maxLines: null,
+                      minLines: null,
+                      textAlignVertical: TextAlignVertical.top,
+                      keyboardType: TextInputType.multiline,
+                      autocorrect: false,
+                      smartDashesType: SmartDashesType.disabled,
+                      smartQuotesType: SmartQuotesType.disabled,
+                      style: style,
+                      strutStyle: strut,
+                      cursorColor: Colors.white,
+                      inputFormatters: _formatters,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: InputBorder.none,
+                        contentPadding: _textPadding,
                       ),
+                      onChanged: widget.onChanged,
                     ),
-                  );
-                },
+                  ),
+                ],
               );
             },
           ),
         ),
+        // 記号入力バー
         Container(
           height: 44,
           color: _C.bar,
