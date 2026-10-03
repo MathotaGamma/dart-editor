@@ -1,6 +1,7 @@
-# dart_editor_build_v2.yml からの差分:
-# - APK/Webのビルドに --no-tree-shake-icons を追加
-#   (flutter_eval が実行時にアイコンを動的生成するため、アイコンの削減(tree shaking)を無効化)
+# dart_editor_build_v3.yml からの差分:
+# - dart_eval のバグ修正パッチを適用する手順を追加
+#   (for の初期化で宣言した変数が、if の中の break で抜けたときにスタックへ残り、
+#    その後の処理の値がずれる不具合。macros/branch.dart の後始末を修正する)
 
 name: Build Dart Editor
 
@@ -48,6 +49,42 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Patch dart_eval (break leak)
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+
+          root = os.environ.get('PUB_CACHE') or os.path.expanduser('~/.pub-cache')
+          files = glob.glob(os.path.join(
+              root, 'hosted', 'pub.dev', 'dart_eval-*',
+              'lib', 'src', 'eval', 'compiler', 'macros', 'branch.dart'))
+          if not files:
+              print('WARNING: dart_eval の branch.dart が見つからないため、パッチを適用していません')
+
+          for p in files:
+              s = open(p, encoding='utf-8').read()
+              if 'PATCHED-BREAK-LEAK' in s:
+                  print('already patched:', p)
+                  continue
+              then_old = '    //_ctx.endAllocScopeQuiet();\n'
+              else_old = ('      ctx.endAllocScope();\n'
+                          '      ctx.resolveBranchStateDiscontinuity(initialState);\n'
+                          '      ctx.endAllocScope();\n'
+                          '      return -1;\n')
+              if then_old not in s or else_old not in s:
+                  print('WARNING: 想定した形と違うため、パッチを適用していません:', p)
+                  continue
+              s = s.replace(then_old, '    ctx.endAllocScopeQuiet(); // PATCHED-BREAK-LEAK\n', 1)
+              s = s.replace(else_old,
+                            '      ctx.endAllocScopeQuiet();\n'
+                            '      ctx.resolveBranchStateDiscontinuity(initialState);\n'
+                            '      ctx.endAllocScopeQuiet();\n'
+                            '      return -1;\n', 1)
+              open(p, 'w', encoding='utf-8').write(s)
+              print('patched:', p)
+          PY
 
       - name: Build release APK
         run: flutter build apk --release --no-tree-shake-icons
